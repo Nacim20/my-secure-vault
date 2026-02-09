@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-// 1. ON CHANGE L'IMPORT ICI : On n'utilise plus le fichier lib/supabase
+import { useState } from 'react'; // On a retiré useEffect
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -14,18 +13,10 @@ export default function LoginPage() {
   const [isSignUp, setIsSignUp] = useState(false);
   const router = useRouter();
 
-  // 2. ON CRÉE LE CLIENT ICI (C'est la méthode officielle pour Next.js App Router)
   const supabase = createClientComponentClient();
 
-  useEffect(() => {
-    const checkSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        router.replace('/dashboard'); // Ou '/' selon ta page d'accueil
-      }
-    };
-    checkSession();
-  }, [router, supabase]);
+  // J'AI SUPPRIMÉ LE BLOC "useEffect" ICI QUI CAUSAIT L'ERREUR ABORT
+  // C'est le middleware qui gère la protection maintenant.
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,7 +29,7 @@ export default function LoginPage() {
           email,
           password,
           options: {
-            emailRedirectTo: `${window.location.origin}/auth/callback`, // Standardisation du callback
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
         });
         
@@ -48,6 +39,7 @@ export default function LoginPage() {
           description: '📧 Vérifiez vos emails pour confirmer votre compte.',
           duration: 8000,
         });
+        setLoading(false); // On arrête le chargement pour qu'il puisse voir le message
 
       } else {
         // --- CONNEXION ---
@@ -59,14 +51,15 @@ export default function LoginPage() {
         if (error) throw error;
         
         toast.success("Connexion réussie");
-        router.refresh(); // Important : Rafraîchit les composants serveur
-        router.replace('/dashboard'); // Ou '/'
+        
+        // C'est ici qu'on redirige proprement
+        router.refresh(); 
+        router.push('/dashboard'); // Utilise push au lieu de replace pour éviter les conflits
       }
     } catch (err: any) {
       toast.error('Erreur', {
         description: err.message || "Une erreur est survenue.",
       });
-    } finally {
       setLoading(false);
     }
   };
