@@ -1,27 +1,23 @@
-import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import "./globals.css";
-import { VaultProvider } from "@/components/providers/VaultProvider";
-
-const inter = Inter({ subsets: ["latin"] });
+import './globals.css';
+import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: "SecureVault - Gestionnaire Zero-Knowledge",
-  description: "Vos mots de passe chiffrés, accessibles uniquement par vous.",
+  title: 'SecureVault',
+  description: 'Coffre fort sécurisé',
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="fr">
-      <body className={`${inter.className} bg-gray-950 text-white antialiased`}>
-        {/* On enveloppe toute l'app ici */}
-        <VaultProvider>
+      {/* On s'assure que le body prend tout l'écran et permet le scroll */}
+      <body className="min-h-screen bg-gray-950 text-white antialiased overflow-y-auto">
+        <main className="relative z-10">
           {children}
-        </VaultProvider>
+        </main>
       </body>
     </html>
   );
