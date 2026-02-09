@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+// 1. ON CHANGE L'IMPORT ICI : On n'utilise plus le fichier lib/supabase
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
@@ -10,19 +11,21 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [isSignUp, setIsSignUp] = useState(false); // Bascule entre Login et Inscription
+  const [isSignUp, setIsSignUp] = useState(false);
   const router = useRouter();
 
-  // 1. Redirection si déjà connecté
+  // 2. ON CRÉE LE CLIENT ICI (C'est la méthode officielle pour Next.js App Router)
+  const supabase = createClientComponentClient();
+
   useEffect(() => {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        router.replace('/dashboard');
+        router.replace('/dashboard'); // Ou '/' selon ta page d'accueil
       }
     };
     checkSession();
-  }, [router]);
+  }, [router, supabase]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,18 +38,15 @@ export default function LoginPage() {
           email,
           password,
           options: {
-            // C'est l'astuce pour rediriger l'utilisateur après le clic sur le lien email
-            // window.location.origin détecte tout seul si c'est localhost ou vercel
-            emailRedirectTo: `${window.location.origin}/dashboard`,
+            emailRedirectTo: `${window.location.origin}/auth/callback`, // Standardisation du callback
           },
         });
         
         if (error) throw error;
 
-        // Message succès inscription
-        toast.success('Compte créé avec succès !', {
-          description: '📧 Un email de confirmation a été envoyé. Vérifiez votre boîte de réception (et vos spams) pour activer le compte.',
-          duration: 8000, // On laisse le message longtemps pour qu'il soit lu
+        toast.success('Inscription réussie !', {
+          description: '📧 Vérifiez vos emails pour confirmer votre compte.',
+          duration: 8000,
         });
 
       } else {
@@ -59,10 +59,10 @@ export default function LoginPage() {
         if (error) throw error;
         
         toast.success("Connexion réussie");
-        router.replace('/dashboard');
+        router.refresh(); // Important : Rafraîchit les composants serveur
+        router.replace('/dashboard'); // Ou '/'
       }
     } catch (err: any) {
-      // Gestion des erreurs (ex: email déjà pris, mot de passe faux)
       toast.error('Erreur', {
         description: err.message || "Une erreur est survenue.",
       });
@@ -117,7 +117,7 @@ export default function LoginPage() {
             {loading && <Loader2 className="animate-spin" size={20} />}
             {loading 
               ? 'Traitement en cours...' 
-              : (isSignUp ? "S'inscrire et recevoir le lien" : "Se connecter")
+              : (isSignUp ? "S'inscrire" : "Se connecter")
             }
           </button>
         </form>
