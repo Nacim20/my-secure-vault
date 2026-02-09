@@ -1,33 +1,26 @@
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
-import { Toaster } from 'sonner';
-// On importe le moteur qu'on a retrouvé grâce à toi
-import { VaultProvider } from '@/components/providers/VaultProvider';
-import './globals.css';
+import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+import { VaultProvider } from "@/components/providers/VaultProvider";
 
-const inter = Inter({ subsets: ['latin'] });
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: 'SecureVault',
-  description: 'Votre coffre fort sécurisé',
+  title: "SecureVault - Gestionnaire Zero-Knowledge",
+  description: "Vos mots de passe chiffrés, accessibles uniquement par vous.",
 };
 
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode;
-}) {
+}>) {
   return (
     <html lang="fr">
-      <body className={`${inter.className} bg-gray-950 text-white antialiased overflow-y-auto`}>
-        {/* On englobe tout le site avec le moteur (Provider) */}
+      <body className={`${inter.className} bg-gray-950 text-white antialiased`}>
+        {/* On enveloppe toute l'app ici */}
         <VaultProvider>
-          <main className="min-h-screen relative z-10">
-            {children}
-          </main>
-          
-          {/* Les notifications (Toast) */}
-          <Toaster richColors position="top-center" />
+          {children}
         </VaultProvider>
       </body>
     </html>
