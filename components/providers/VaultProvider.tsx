@@ -21,86 +21,101 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   const [masterKey, setMasterKey] = useState<string | null>(null);
   const [requiresSetup, setRequiresSetup] = useState(false);
   const [verifier, setVerifier] = useState<string | null>(null);
+  // On commence toujours en chargement pour éviter le "flash" de la page de login
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
+  // Fonction centrale de chargement
   const loadProfileAndKey = async (userId: string) => {
     try {
-      // On récupère le profil
+      // 1. Récupération du profil
       const { data, error } = await supabase
         .from('profiles')
         .select('key_verifier')
         .eq('id', userId)
         .single();
 
-      // LOGIQUE CORRIGÉE ICI :
-      // Cas 1 : Pas de profil ou Erreur -> Setup requis
-      // Cas 2 : Profil existe mais key_verifier est NULL -> Setup requis
       if (error || !data || !data.key_verifier) {
-        console.log("Compte vierge détecté : Configuration requise");
+        console.log("VaultProvider: Configuration requise (Pas de verifier trouvé)");
         setRequiresSetup(true);
         setVerifier(null);
-      } 
-      // Cas 3 : Tout est bon, on a un verifier
-      else {
+        setMasterKey(null);
+      } else {
+        // 2. Profil trouvé
         setVerifier(data.key_verifier);
         setRequiresSetup(false);
 
-        // Tentative de récupération depuis sessionStorage (Confort)
-        const savedKey = sessionStorage.getItem('vault_master_key');
+        // 3. Tentative de restauration de la clé depuis la RAM du navigateur (SessionStorage)
+        // Cela permet de survivre au rafraîchissement (F5)
+        const savedKey = typeof window !== 'undefined' ? sessionStorage.getItem('vault_master_key') : null;
+        
         if (savedKey) {
-            if (verifyMasterKey(savedKey, data.key_verifier)) {
-                setMasterKey(savedKey);
+          try {
+            const isValid = verifyMasterKey(savedKey, data.key_verifier);
+            if (isValid) {
+              console.log("VaultProvider: Clé restaurée depuis la session");
+              setMasterKey(savedKey);
             } else {
-                sessionStorage.removeItem('vault_master_key');
+              console.warn("VaultProvider: Clé en session invalide, nettoyage.");
+              sessionStorage.removeItem('vault_master_key');
+              setMasterKey(null);
             }
+          } catch (err) {
+            console.error("Erreur vérification clé stockée:", err);
+            sessionStorage.removeItem('vault_master_key');
+          }
         }
       }
     } catch (e) {
       console.error("Erreur critique chargement profil:", e);
-      setRequiresSetup(true); // Par sécurité, si ça plante, on propose le setup
     } finally {
+      // C'est ICI qu'on dit à l'app "C'est bon, on sait qui tu es, on arrête de charger"
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    // Vérification session initiale
-    const initAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        await loadProfileAndKey(session.user.id);
-      } else {
-        setIsLoading(false);
-      }
+    let mounted = true;
+
+    const initialize = async () => {
+      // On écoute les changements d'état (Login, Logout, Refresh)
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (!mounted) return;
+
+        if (session?.user) {
+          // Si l'utilisateur est connecté, on charge son coffre
+          await loadProfileAndKey(session.user.id);
+        } else {
+          // Si pas d'utilisateur, on reset tout
+          setMasterKey(null);
+          setVerifier(null);
+          setRequiresSetup(false);
+          setIsLoading(false); // Important : arrêter le chargement même si on n'est pas connecté
+        }
+      });
+
+      return subscription;
     };
 
-    initAuth();
+    const subPromise = initialize();
 
-    // Écoute temps réel (utile pour le retour du lien magique)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session?.user) {
-        // Si on vient de se connecter ou de cliquer sur le lien magique
-        await loadProfileAndKey(session.user.id);
-      } else if (event === 'SIGNED_OUT') {
-        setMasterKey(null);
-        setVerifier(null);
-        setRequiresSetup(false);
-        sessionStorage.removeItem('vault_master_key');
-        setIsLoading(false);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subPromise.then(sub => sub?.unsubscribe());
+    };
   }, []);
 
   const unlock = async (key: string) => {
     if (!verifier) return false;
-    const isValid = verifyMasterKey(key, verifier);
-    if (isValid) {
-      setMasterKey(key);
-      sessionStorage.setItem('vault_master_key', key);
-      return true;
+    try {
+      const isValid = verifyMasterKey(key, verifier);
+      if (isValid) {
+        setMasterKey(key);
+        sessionStorage.setItem('vault_master_key', key);
+        return true;
+      }
+    } catch (e) {
+      console.error("Erreur lors du déverrouillage:", e);
     }
     return false;
   };
@@ -109,21 +124,21 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return false;
 
-    const newVerifier = generateVerifier(key);
-    
-    // On force l'update même si la ligne existe déjà
-    const { error } = await supabase
-      .from('profiles')
-      .upsert({ id: user.id, key_verifier: newVerifier });
+    try {
+      const newVerifier = generateVerifier(key);
+      const { error } = await supabase
+        .from('profiles')
+        .upsert({ id: user.id, key_verifier: newVerifier });
 
-    if (!error) {
-      setVerifier(newVerifier);
-      setMasterKey(key);
-      sessionStorage.setItem('vault_master_key', key);
-      setRequiresSetup(false);
-      return true;
-    } else {
-      console.error("Erreur setup DB:", error);
+      if (!error) {
+        setVerifier(newVerifier);
+        setMasterKey(key);
+        sessionStorage.setItem('vault_master_key', key);
+        setRequiresSetup(false);
+        return true;
+      }
+    } catch (e) {
+      console.error("Erreur setup:", e);
     }
     return false;
   };
@@ -131,7 +146,8 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   const lock = () => {
     setMasterKey(null);
     sessionStorage.removeItem('vault_master_key');
-    router.push('/dashboard'); 
+    // On ne redirige pas forcément, on laisse le VaultGuard faire son travail d'affichage
+    router.refresh(); 
   };
 
   return (
