@@ -1,7 +1,9 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-// On n'importe plus rien de complexe pour le test
+import { supabase } from '@/lib/supabase';
+import { verifyMasterKey, generateVerifier } from '@/lib/crypto';
+import { useRouter } from 'next/navigation';
 
 interface VaultContextType {
   masterKey: string | null;
@@ -16,48 +18,139 @@ interface VaultContextType {
 const VaultContext = createContext<VaultContextType | undefined>(undefined);
 
 export function VaultProvider({ children }: { children: React.ReactNode }) {
-  // On met des valeurs par défaut qui disent "TOUT EST OK"
-  const [masterKey, setMasterKey] = useState<string | null>("CLE_DE_TEST");
-  const [isLoading, setIsLoading] = useState(true); // On commence true...
+  const [masterKey, setMasterKey] = useState<string | null>(null);
+  const [requiresSetup, setRequiresSetup] = useState(false);
+  const [verifier, setVerifier] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
+
+  // Fonction pour tout remettre à zéro proprement
+  const resetState = () => {
+    setMasterKey(null);
+    setVerifier(null);
+    setRequiresSetup(false);
+    setIsLoading(false);
+    if (typeof window !== 'undefined') sessionStorage.removeItem('vault_master_key');
+  };
+
+  const loadProfile = async (userId: string) => {
+    try {
+      console.log("VaultProvider: Chargement du profil...");
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('key_verifier')
+        .eq('id', userId)
+        .single();
+
+      if (error || !data || !data.key_verifier) {
+        console.log("VaultProvider: Profil non configuré.");
+        setRequiresSetup(true);
+        setVerifier(null);
+      } else {
+        console.log("VaultProvider: Profil chargé.");
+        setVerifier(data.key_verifier);
+        setRequiresSetup(false);
+
+        // Tentative de restauration de session (pour survivre au F5)
+        const savedKey = sessionStorage.getItem('vault_master_key');
+        if (savedKey) {
+          try {
+            if (verifyMasterKey(savedKey, data.key_verifier)) {
+              console.log("VaultProvider: Clé restaurée depuis la session.");
+              setMasterKey(savedKey);
+            } else {
+              sessionStorage.removeItem('vault_master_key');
+            }
+          } catch (e) {
+            sessionStorage.removeItem('vault_master_key');
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Erreur chargement:", e);
+    } finally {
+      // LE PLUS IMPORTANT : Quoi qu'il arrive, on arrête le chargement
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    // ...et on passe à false après 1 petite seconde, sans aucune vérification
-    const timer = setTimeout(() => {
-      console.log("🔓 MODE DÉBUG : Vault déverrouillé automatiquement");
-      setIsLoading(false);
-    }, 500);
+    let mounted = true;
 
-    return () => clearTimeout(timer);
+    // SÉCURITÉ ANTI-BOUCLE : Si dans 3 secondes rien n'est chargé, on force l'affichage
+    const safetyTimer = setTimeout(() => {
+      if (mounted) {
+        setIsLoading((currentLoading) => {
+          if (currentLoading) {
+            console.warn("⚠️ Sécurité: Chargement forcé après timeout");
+            return false;
+          }
+          return currentLoading;
+        });
+      }
+    }, 3000);
+
+    const init = async () => {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (!mounted) return;
+        
+        console.log(`VaultAuth: Event ${event}`);
+
+        if (session?.user) {
+          await loadProfile(session.user.id);
+        } else {
+          resetState();
+        }
+      });
+      return subscription;
+    };
+
+    const subPromise = init();
+
+    return () => {
+      mounted = false;
+      clearTimeout(safetyTimer);
+      subPromise.then(sub => sub?.unsubscribe());
+    };
   }, []);
 
-  // Des fausses fonctions qui répondent toujours "OUI"
   const unlock = async (key: string) => {
-    console.log("Unlock simulé");
-    setMasterKey(key);
-    return true;
+    if (!verifier) return false;
+    try {
+      if (verifyMasterKey(key, verifier)) {
+        setMasterKey(key);
+        sessionStorage.setItem('vault_master_key', key);
+        return true;
+      }
+    } catch (e) { console.error(e); }
+    return false;
   };
 
   const setup = async (key: string) => {
-    console.log("Setup simulé");
-    setMasterKey(key);
-    return true;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return false;
+    try {
+      const newVerifier = generateVerifier(key);
+      const { error } = await supabase.from('profiles').upsert({ id: user.id, key_verifier: newVerifier });
+      if (!error) {
+        setVerifier(newVerifier);
+        setMasterKey(key);
+        sessionStorage.setItem('vault_master_key', key);
+        setRequiresSetup(false);
+        return true;
+      }
+    } catch (e) { console.error(e); }
+    return false;
   };
 
   const lock = () => {
-    console.log("Lock simulé");
     setMasterKey(null);
+    sessionStorage.removeItem('vault_master_key');
+    router.refresh();
   };
 
   return (
-    <VaultContext.Provider value={{ 
-      masterKey, // On envoie une fausse clé
-      isLocked: false, // On dit que ce n'est jamais verrouillé
-      isLoading, 
-      requiresSetup: false, // On dit que tout est déjà configuré
-      unlock, 
-      setup, 
-      lock 
-    }}>
+    <VaultContext.Provider value={{ masterKey, isLocked: !masterKey, isLoading, requiresSetup, unlock, setup, lock }}>
       {children}
     </VaultContext.Provider>
   );
