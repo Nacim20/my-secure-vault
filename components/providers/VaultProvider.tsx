@@ -35,7 +35,6 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
 
   const loadProfile = async (userId: string) => {
     try {
-      console.log("VaultProvider: Chargement du profil...");
       const { data, error } = await supabase
         .from('profiles')
         .select('key_verifier')
@@ -43,33 +42,21 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         .single();
 
       if (error || !data || !data.key_verifier) {
-        console.log("VaultProvider: Profil non configuré.");
         setRequiresSetup(true);
         setVerifier(null);
       } else {
-        console.log("VaultProvider: Profil chargé.");
         setVerifier(data.key_verifier);
         setRequiresSetup(false);
-
-        // Tentative de restauration de session (pour survivre au F5)
+        
+        // Tentative de restauration (optionnel)
         const savedKey = sessionStorage.getItem('vault_master_key');
-        if (savedKey) {
-          try {
-            if (verifyMasterKey(savedKey, data.key_verifier)) {
-              console.log("VaultProvider: Clé restaurée depuis la session.");
-              setMasterKey(savedKey);
-            } else {
-              sessionStorage.removeItem('vault_master_key');
-            }
-          } catch (e) {
-            sessionStorage.removeItem('vault_master_key');
-          }
+        if (savedKey && verifyMasterKey(savedKey, data.key_verifier)) {
+             setMasterKey(savedKey);
         }
       }
     } catch (e) {
       console.error("Erreur chargement:", e);
     } finally {
-      // LE PLUS IMPORTANT : Quoi qu'il arrive, on arrête le chargement
       setIsLoading(false);
     }
   };
@@ -77,25 +64,14 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    // SÉCURITÉ ANTI-BOUCLE : Si dans 3 secondes rien n'est chargé, on force l'affichage
+    // Sécurité anti-boucle
     const safetyTimer = setTimeout(() => {
-      if (mounted) {
-        setIsLoading((currentLoading) => {
-          if (currentLoading) {
-            console.warn("⚠️ Sécurité: Chargement forcé après timeout");
-            return false;
-          }
-          return currentLoading;
-        });
-      }
-    }, 3000);
+      if (mounted) setIsLoading(false);
+    }, 2000);
 
     const init = async () => {
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         if (!mounted) return;
-        
-        console.log(`VaultAuth: Event ${event}`);
-
         if (session?.user) {
           await loadProfile(session.user.id);
         } else {
@@ -114,15 +90,45 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // 👇 C'EST ICI QUE LA MAGIE OPÈRE (La correction) 👇
   const unlock = async (key: string) => {
-    if (!verifier) return false;
+    let currentVerifier = verifier;
+
+    // 1. Si on n'a pas le "verificateur" en mémoire (bug du refresh), on va le chercher de force
+    if (!currentVerifier) {
+        console.log("⚠️ Verifier manquant, récupération d'urgence...");
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (user) {
+            const { data } = await supabase
+                .from('profiles')
+                .select('key_verifier')
+                .eq('id', user.id)
+                .single();
+            
+            if (data?.key_verifier) {
+                currentVerifier = data.key_verifier;
+                setVerifier(data.key_verifier); // On met à jour l'état pour la prochaine fois
+                console.log("✅ Verifier récupéré !");
+            }
+        }
+    }
+
+    // 2. Si après ça on n'a toujours rien, c'est que le compte n'est pas configuré
+    if (!currentVerifier) {
+        console.error("❌ Impossible de déverrouiller : Aucun verifier trouvé.");
+        return false;
+    }
+
+    // 3. Vérification classique
     try {
-      if (verifyMasterKey(key, verifier)) {
+      if (verifyMasterKey(key, currentVerifier)) {
         setMasterKey(key);
         sessionStorage.setItem('vault_master_key', key);
         return true;
       }
     } catch (e) { console.error(e); }
+    
     return false;
   };
 
