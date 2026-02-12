@@ -24,17 +24,28 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
-  // Fonction pour tout remettre à zéro proprement
+  // Nettoyage complet
   const resetState = () => {
     setMasterKey(null);
     setVerifier(null);
     setRequiresSetup(false);
     setIsLoading(false);
-    if (typeof window !== 'undefined') sessionStorage.removeItem('vault_master_key');
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('vault_master_key');
+      sessionStorage.removeItem('vault_verifier'); // On nettoie aussi le cache du verifier
+    }
   };
 
   const loadProfile = async (userId: string) => {
     try {
+      // 1. D'abord, on regarde si on a le verifier en cache (C'est ça qui répare le bug du refresh)
+      const cachedVerifier = sessionStorage.getItem('vault_verifier');
+      if (cachedVerifier) {
+        console.log("⚡ Cache: Verifier restauré instantanément");
+        setVerifier(cachedVerifier);
+      }
+
+      // 2. On lance quand même la requête pour être à jour, mais on n'attend pas forcément
       const { data, error } = await supabase
         .from('profiles')
         .select('key_verifier')
@@ -42,16 +53,25 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         .single();
 
       if (error || !data || !data.key_verifier) {
-        setRequiresSetup(true);
-        setVerifier(null);
+        // Si vraiment on a rien trouvé nulle part
+        if (!cachedVerifier) {
+          setRequiresSetup(true);
+          setVerifier(null);
+        }
       } else {
+        // Mise à jour du cache avec la version fraîche
         setVerifier(data.key_verifier);
+        sessionStorage.setItem('vault_verifier', data.key_verifier); 
         setRequiresSetup(false);
-        
-        // Tentative de restauration (optionnel)
+
+        // Tentative de déverrouillage automatique (si la clé est aussi en cache)
         const savedKey = sessionStorage.getItem('vault_master_key');
-        if (savedKey && verifyMasterKey(savedKey, data.key_verifier)) {
-             setMasterKey(savedKey);
+        if (savedKey) {
+            if (verifyMasterKey(savedKey, data.key_verifier)) {
+                setMasterKey(savedKey);
+            } else {
+                sessionStorage.removeItem('vault_master_key');
+            }
         }
       }
     } catch (e) {
@@ -64,9 +84,9 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    // Sécurité anti-boucle
+    // Sécurité : Si dans 2s c'est pas chargé, on arrête le spinner
     const safetyTimer = setTimeout(() => {
-      if (mounted) setIsLoading(false);
+      if (mounted) setIsLoading((l) => (l ? false : l));
     }, 2000);
 
     const init = async () => {
@@ -82,7 +102,6 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     };
 
     const subPromise = init();
-
     return () => {
       mounted = false;
       clearTimeout(safetyTimer);
@@ -90,37 +109,34 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // 👇 C'EST ICI QUE LA MAGIE OPÈRE (La correction) 👇
-  const unlock = async (key: string) => {
-    let currentVerifier = verifier;
+  // 👇 LA FONCTION UNLOCK CORRIGÉE
+  const unlock = async (key: string): Promise<boolean> => {
+    // On cherche le verifier partout : dans l'état, ou dans le cache
+    let currentVerifier = verifier || sessionStorage.getItem('vault_verifier');
 
-    // 1. Si on n'a pas le "verificateur" en mémoire (bug du refresh), on va le chercher de force
+    // Si toujours pas là, on tente un dernier appel désespéré à la DB
     if (!currentVerifier) {
-        console.log("⚠️ Verifier manquant, récupération d'urgence...");
+        console.log("⚠️ Récupération d'urgence du verifier...");
         const { data: { user } } = await supabase.auth.getUser();
-        
         if (user) {
             const { data } = await supabase
                 .from('profiles')
                 .select('key_verifier')
                 .eq('id', user.id)
                 .single();
-            
             if (data?.key_verifier) {
                 currentVerifier = data.key_verifier;
-                setVerifier(data.key_verifier); // On met à jour l'état pour la prochaine fois
-                console.log("✅ Verifier récupéré !");
+                setVerifier(data.key_verifier);
+                sessionStorage.setItem('vault_verifier', data.key_verifier);
             }
         }
     }
 
-    // 2. Si après ça on n'a toujours rien, c'est que le compte n'est pas configuré
     if (!currentVerifier) {
-        console.error("❌ Impossible de déverrouiller : Aucun verifier trouvé.");
+        console.error("❌ Echec: Impossible de vérifier la clé (Verifier manquant)");
         return false;
     }
 
-    // 3. Vérification classique
     try {
       if (verifyMasterKey(key, currentVerifier)) {
         setMasterKey(key);
@@ -140,6 +156,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       const { error } = await supabase.from('profiles').upsert({ id: user.id, key_verifier: newVerifier });
       if (!error) {
         setVerifier(newVerifier);
+        sessionStorage.setItem('vault_verifier', newVerifier); // On cache direct
         setMasterKey(key);
         sessionStorage.setItem('vault_master_key', key);
         setRequiresSetup(false);
@@ -152,6 +169,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   const lock = () => {
     setMasterKey(null);
     sessionStorage.removeItem('vault_master_key');
+    // On garde le verifier en cache pour pouvoir déverrouiller vite !
     router.refresh();
   };
 
