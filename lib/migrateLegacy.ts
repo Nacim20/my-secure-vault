@@ -17,7 +17,10 @@ export async function migrateLegacyItems(
   passphrase: string,
   key: CryptoKey
 ): Promise<MigrationResult> {
-  const { data, error } = await supabase.from('vault_items').select('id, encrypted_password');
+  const { data, error } = await supabase
+    .from('vault_items')
+    .select('id, encrypted_password')
+    .not('encrypted_password', 'like', 'v2.%'); // uniquement ce qui reste à convertir
   if (error) throw error;
 
   const legacyItems = (data ?? []).filter((item) => !isV2Item(item.encrypted_password));

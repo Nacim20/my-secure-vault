@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { useVault } from '@/components/providers/VaultProvider';
 import { toast } from 'sonner';
 import type { VaultItem } from '@/types';
+import { withTimeout } from '@/lib/withTimeout';
 
 // Composants
 import VaultGuard from '@/components/vault/VaultGuard';
@@ -21,20 +22,25 @@ export default function Dashboard() {
   
   const [items, setItems] = useState<VaultItem[]>([]);
   const [loadingData, setLoadingData] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchData = async () => {
     setLoadingData(true);
+    setLoadError(null);
     try {
-      const { data, error } = await supabase
-        .from('vault_items')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const { data, error } = await withTimeout(
+        Promise.resolve(
+          supabase.from('vault_items').select('*').order('created_at', { ascending: false })
+        ),
+        10_000,
+        'Délai dépassé'
+      );
 
       if (error) throw error;
       if (data) setItems(data);
     } catch (error) {
-      console.error('Erreur fetch:', error);
-      // On ne met pas de toast erreur ici pour éviter le spam si c'est juste vide
+      console.error('Erreur de chargement du coffre :', error);
+      setLoadError(error instanceof Error ? error.message : 'Erreur inconnue');
     } finally {
       setLoadingData(false);
     }
@@ -142,6 +148,20 @@ export default function Dashboard() {
               <div className="flex flex-col items-center justify-center py-20 text-gray-500 animate-pulse">
                 <ShieldCheck size={48} className="mb-4 opacity-20" />
                 <p>Déchiffrement des données en cours...</p>
+              </div>
+            ) : loadError ? (
+              <div className="flex flex-col items-center justify-center gap-4 py-16 text-center border border-red-900/40 rounded-3xl bg-red-950/20">
+                <AlertTriangle size={32} className="text-red-400" />
+                <div>
+                  <p className="text-gray-200 font-medium">Impossible de charger vos mots de passe</p>
+                  <p className="text-gray-500 text-sm mt-1">{loadError}</p>
+                </div>
+                <button
+                  onClick={fetchData}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-xl text-white font-medium transition"
+                >
+                  Réessayer
+                </button>
               </div>
             ) : items.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-24 text-gray-500 border border-dashed border-gray-800 rounded-3xl bg-gray-900/20 backdrop-blur-sm">

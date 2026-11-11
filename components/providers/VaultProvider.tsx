@@ -11,6 +11,7 @@ import {
   verifyLegacyPassphrase,
 } from '@/lib/crypto';
 import { migrateLegacyItems } from '@/lib/migrateLegacy';
+import { withTimeout } from '@/lib/withTimeout';
 
 export const MIN_MASTER_KEY_LENGTH = 12;
 
@@ -85,12 +86,20 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       if (mounted) setIsLoading(false);
     }, 2000);
 
+    // IMPORTANT : ce callback ne doit ni être async ni attendre un appel Supabase.
+    // Il s'exécute à l'intérieur d'un verrou de la bibliothèque d'authentification : attendre une
+    // requête ici peut bloquer toutes les requêtes suivantes (chargement infini après un rechargement).
+    // On déporte donc le travail avec setTimeout, comme le recommande la documentation Supabase.
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
-      if (session?.user) await loadProfile(session.user.id);
-      else resetState();
+      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') return;
+      setTimeout(() => {
+        if (!mounted) return;
+        if (session?.user) void loadProfile(session.user.id);
+        else resetState();
+      }, 0);
     });
 
     return () => {
@@ -152,9 +161,14 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
 
       if (!key) return false;
 
-      // Convertit les éventuels éléments encore dans l'ancien format.
+      // Convertit les éventuels éléments encore dans l'ancien format (15 s maximum : si le réseau
+      // est lent, la suite se fera au prochain déverrouillage plutôt que de bloquer l'écran).
       try {
-        const { migrated, failed } = await migrateLegacyItems(passphrase, key);
+        const { migrated, failed } = await withTimeout(
+          migrateLegacyItems(passphrase, key),
+          15_000,
+          'Migration trop longue'
+        );
         if (migrated > 0) toast.success(`${migrated} mot(s) de passe mis à jour vers le nouveau chiffrement`);
         if (failed > 0) toast.error(`${failed} élément(s) n'ont pas pu être convertis`);
       } catch (e) {
