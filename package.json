@@ -11,7 +11,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@supabase/auth-helpers-nextjs": "^0.10.0",
     "@supabase/supabase-js": "^2.95.3",
     "clsx": "^2.1.1",
     "crypto-js": "^4.2.0",

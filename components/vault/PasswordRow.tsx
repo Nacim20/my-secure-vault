@@ -1,13 +1,14 @@
 'use client';
 import { useState } from 'react';
-import { VaultItem } from '@/types';
+import type { DecryptedVaultItem } from '@/types';
 import { decrypt } from '@/lib/crypto';
+import { copySecret } from '@/lib/clipboard';
 import { Eye, EyeOff, Copy, Trash2, Shield, Globe, KeyRound } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 
 interface Props {
-  item: VaultItem;
+  item: DecryptedVaultItem;
   vaultKey: CryptoKey;
   onDelete: (id: string) => void;
 }
@@ -42,10 +43,10 @@ export default function PasswordRow({ item, vaultKey, onDelete }: Props) {
       toast.error("Impossible de déchiffrer cet élément");
       return;
     }
-    await navigator.clipboard.writeText(plain);
+    await copySecret(plain);
     if (!isVisible) setPlainPassword(null);
     setIsCopied(true);
-    toast.success("Mot de passe copié !");
+    toast.success("Mot de passe copié", { description: "Le presse-papiers sera vidé dans 30 secondes." });
     setTimeout(() => setIsCopied(false), 2000);
   };
 

@@ -14,6 +14,8 @@ import { migrateLegacyItems } from '@/lib/migrateLegacy';
 import { withTimeout } from '@/lib/withTimeout';
 
 export const MIN_MASTER_KEY_LENGTH = 12;
+/** Le coffre se verrouille seul après ce délai sans activité. */
+export const IDLE_LOCK_MS = 5 * 60 * 1000;
 
 interface VaultContextType {
   /** Clé de chiffrement dérivée. Uniquement en mémoire : jamais écrite dans le navigateur. */
@@ -200,10 +202,30 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const lock = () => {
+  const lock = useCallback(() => {
     setVaultKey(null);
     router.refresh();
-  };
+  }, [router]);
+
+  // Verrouillage automatique : on efface la clé de la mémoire après 5 minutes d'inactivité.
+  useEffect(() => {
+    if (!vaultKey) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        lock();
+        toast('Coffre verrouillé après 5 minutes d\'inactivité');
+      }, IDLE_LOCK_MS);
+    };
+    const events = ['pointerdown', 'keydown', 'scroll', 'touchstart'] as const;
+    events.forEach((e) => window.addEventListener(e, arm, { passive: true }));
+    arm();
+    return () => {
+      clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, arm));
+    };
+  }, [vaultKey, lock]);
 
   return (
     <VaultContext.Provider

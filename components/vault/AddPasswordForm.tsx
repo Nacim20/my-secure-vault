@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { encrypt } from '@/lib/crypto';
+import { encryptFields } from '@/lib/vaultItems';
 import { Plus, X } from 'lucide-react';
 
 interface Props {
@@ -24,12 +25,14 @@ export default function AddPasswordForm({ vaultKey, onSuccess }: Props) {
 
       // 🔐 CHIFFREMENT ICI (Côté Client)
       const encrypted = await encrypt(formData.password, vaultKey);
+      const fields = await encryptFields(
+        { title: formData.title, username: formData.username, website: formData.website },
+        vaultKey
+      );
 
       const { error } = await supabase.from('vault_items').insert({
         user_id: user.id,
-        title: formData.title,
-        username: formData.username,
-        website_url: formData.website,
+        ...fields, // titre, identifiant et URL chiffrés
         encrypted_password: encrypted, // On envoie uniquement la version chiffrée
       });
 
@@ -94,6 +97,7 @@ export default function AddPasswordForm({ vaultKey, onSuccess }: Props) {
           />
           <input 
             type="password"
+            autoComplete="new-password"
             placeholder="Mot de passe" 
             required
             className="bg-gray-950 border border-gray-800 p-3 rounded text-white focus:border-blue-500 outline-none"

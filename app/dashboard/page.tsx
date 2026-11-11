@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useVault } from '@/components/providers/VaultProvider';
 import { toast } from 'sonner';
-import type { VaultItem } from '@/types';
+import type { DecryptedVaultItem, VaultItem } from '@/types';
+import { decryptItem, encryptFields } from '@/lib/vaultItems';
 import { withTimeout } from '@/lib/withTimeout';
 
 // Composants
@@ -20,11 +21,28 @@ export default function Dashboard() {
   const { lock, vaultKey, isLocked, isLoading: isVaultLoading, requiresSetup, unlock, setup } = useVault();
   const router = useRouter();
   
-  const [items, setItems] = useState<VaultItem[]>([]);
+  const [items, setItems] = useState<DecryptedVaultItem[]>([]);
   const [loadingData, setLoadingData] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const fetchData = async () => {
+  // Les anciens éléments dont le titre, l'identifiant ou l'URL sont en clair sont chiffrés au passage.
+  // Opération sans risque à rejouer : elle ne touche que ce qui n'est pas encore chiffré.
+  const upgradePlaintextItems = useCallback(async (list: DecryptedVaultItem[]) => {
+    for (const item of list.filter((i) => i.needsUpgrade)) {
+      try {
+        const fields = await encryptFields(
+          { title: item.title, username: item.username, website: item.website_url },
+          vaultKey!
+        );
+        const { error } = await supabase.from('vault_items').update(fields).eq('id', item.id);
+        if (error) throw error;
+      } catch (e) {
+        console.error('Chiffrement des champs impossible pour', item.id, e);
+      }
+    }
+  }, [vaultKey]);
+
+  const fetchData = useCallback(async () => {
     setLoadingData(true);
     setLoadError(null);
     try {
@@ -37,21 +55,26 @@ export default function Dashboard() {
       );
 
       if (error) throw error;
-      if (data) setItems(data);
+
+      const decrypted = await Promise.all(
+        ((data ?? []) as VaultItem[]).map((row) => decryptItem(row, vaultKey!))
+      );
+      setItems(decrypted);
+      void upgradePlaintextItems(decrypted);
     } catch (error) {
       console.error('Erreur de chargement du coffre :', error);
       setLoadError(error instanceof Error ? error.message : 'Erreur inconnue');
     } finally {
       setLoadingData(false);
     }
-  };
+  }, [vaultKey, upgradePlaintextItems]);
 
   // On charge les données uniquement si le coffre est déverrouillé
   useEffect(() => {
     if (vaultKey) {
       fetchData();
     }
-  }, [vaultKey]);
+  }, [vaultKey, fetchData]);
 
   const handleLogout = async () => {
     lock(); // On verrouille le provider

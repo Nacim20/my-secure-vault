@@ -9,10 +9,10 @@ create table if not exists public.profiles (
 create table if not exists public.vault_items (
   id                 uuid primary key default gen_random_uuid(),
   user_id            uuid not null references auth.users (id) on delete cascade,
-  title              text not null,
-  username           text not null,
+  title              text not null,   -- chiffré côté client : v2.<iv>.<chiffré>
+  username           text not null,   -- chiffré côté client
   encrypted_password text not null,     -- format v2.<iv>.<chiffré>
-  website_url        text,
+  website_url        text,            -- chiffré côté client (vide si non renseigné)
   category           text default 'general',
   created_at         timestamptz not null default now()
 );
