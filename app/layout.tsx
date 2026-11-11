@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "SecureVault - Gestionnaire Zero-Knowledge",
+  title: "SecureVault - Gestionnaire de mots de passe chiffré",
   description: "Vos mots de passe chiffrés, accessibles uniquement par vous.",
 };
 

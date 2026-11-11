@@ -61,10 +61,10 @@ export default function LoginPage() {
         toast.success("Connexion réussie");
         router.replace('/dashboard');
       }
-    } catch (err: any) {
+    } catch (err) {
       // Gestion des erreurs (ex: email déjà pris, mot de passe faux)
       toast.error('Erreur', {
-        description: err.message || "Une erreur est survenue.",
+        description: err instanceof Error ? err.message : "Une erreur est survenue.",
       });
     } finally {
       setLoading(false);

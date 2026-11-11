@@ -5,14 +5,14 @@ import type { NextRequest } from 'next/server'
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next()
 
-  // On utilise "as any" pour contourner l'erreur TypeScript de la version 0.10.0
-  // Cela permet de forcer l'option "sameSite: lax" qui répare Brave/Chrome
+  // sameSite: 'lax' répare la perte de session sous Brave/Chrome.
   const supabase = createMiddlewareClient({ req, res }, {
     cookieOptions: {
       sameSite: 'lax',
       secure: process.env.NODE_ENV === 'production',
-      path: '/', 
-    } as any 
+      path: '/',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any, // le type de la v0.10 exige un champ "domain" ; la lib est dépréciée (migration vers @supabase/ssr à prévoir)
   })
 
   await supabase.auth.getSession()

@@ -5,11 +5,11 @@ import { encrypt } from '@/lib/crypto';
 import { Plus, X } from 'lucide-react';
 
 interface Props {
-  masterKey: string;
+  vaultKey: CryptoKey;
   onSuccess: () => void; // Pour dire au parent de rafraîchir la liste
 }
 
-export default function AddPasswordForm({ masterKey, onSuccess }: Props) {
+export default function AddPasswordForm({ vaultKey, onSuccess }: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [formData, setFormData] = useState({ title: '', username: '', password: '', website: '' });
   const [loading, setLoading] = useState(false);
@@ -23,7 +23,7 @@ export default function AddPasswordForm({ masterKey, onSuccess }: Props) {
       if (!user) throw new Error("Non connecté");
 
       // 🔐 CHIFFREMENT ICI (Côté Client)
-      const encrypted = encrypt(formData.password, masterKey);
+      const encrypted = await encrypt(formData.password, vaultKey);
 
       const { error } = await supabase.from('vault_items').insert({
         user_id: user.id,

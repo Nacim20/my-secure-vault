@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useVault } from '@/components/providers/VaultProvider';
 import { toast } from 'sonner';
+import type { VaultItem } from '@/types';
+import { withTimeout } from '@/lib/withTimeout';
 
 // Composants
 import VaultGuard from '@/components/vault/VaultGuard';
@@ -15,38 +17,41 @@ import AddPasswordForm from '@/components/vault/AddPasswordForm';
 import { ShieldCheck, Lock, LogOut, KeyRound, AlertTriangle } from 'lucide-react';
 
 export default function Dashboard() {
-  const { lock, masterKey, isLocked, isLoading: isVaultLoading, unlock } = useVault();
+  const { lock, vaultKey, isLocked, isLoading: isVaultLoading, requiresSetup, unlock, setup } = useVault();
   const router = useRouter();
   
-  // Note: Dans ton ancien code tu utilisais 'vault_items', je l'ai remis.
-  // Si tu as migré vers la table 'passwords' entre temps, change juste le nom ici.
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<VaultItem[]>([]);
   const [loadingData, setLoadingData] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchData = async () => {
     setLoadingData(true);
+    setLoadError(null);
     try {
-      const { data, error } = await supabase
-        .from('vault_items') // Remis comme sur ta capture
-        .select('*')
-        .order('created_at', { ascending: false });
+      const { data, error } = await withTimeout(
+        Promise.resolve(
+          supabase.from('vault_items').select('*').order('created_at', { ascending: false })
+        ),
+        10_000,
+        'Délai dépassé'
+      );
 
       if (error) throw error;
       if (data) setItems(data);
     } catch (error) {
-      console.error('Erreur fetch:', error);
-      // On ne met pas de toast erreur ici pour éviter le spam si c'est juste vide
+      console.error('Erreur de chargement du coffre :', error);
+      setLoadError(error instanceof Error ? error.message : 'Erreur inconnue');
     } finally {
       setLoadingData(false);
     }
   };
 
-  // On charge les données uniquement si on a la masterKey
+  // On charge les données uniquement si le coffre est déverrouillé
   useEffect(() => {
-    if (masterKey) {
+    if (vaultKey) {
       fetchData();
     }
-  }, [masterKey]);
+  }, [vaultKey]);
 
   const handleLogout = async () => {
     lock(); // On verrouille le provider
@@ -74,20 +79,22 @@ export default function Dashboard() {
       toast.dismiss(toastId);
       toast.success("Compte supprimé avec succès. Au revoir !");
       
-      lock(); // Vide la master key
+      lock(); // Efface la clé de la mémoire
       await supabase.auth.signOut(); // Déconnecte
       sessionStorage.clear(); // Vide le stockage
       router.push('/'); // Retour accueil
 
-    } catch (error: any) {
+    } catch (error) {
       console.error(error);
-      toast.error("Erreur lors de la suppression", { description: error.message });
+      toast.error("Erreur lors de la suppression", {
+        description: error instanceof Error ? error.message : undefined,
+      });
     }
   };
 
   // Si le coffre charge ou est verrouillé, on affiche le Gardien
   if (isVaultLoading || isLocked) {
-    return <VaultGuard onUnlock={unlock} />;
+    return <VaultGuard onUnlock={unlock} onSetup={setup} requiresSetup={requiresSetup} />;
   }
 
   return (
@@ -133,8 +140,8 @@ export default function Dashboard() {
 
         {/* CONTENU PRINCIPAL */}
         <div className="flex flex-col gap-6 mb-20">
-          {/* Formulaire d'ajout qui existait dans ton ancien code */}
-          <AddPasswordForm masterKey={masterKey!} onSuccess={fetchData} />
+          
+          <AddPasswordForm vaultKey={vaultKey!} onSuccess={fetchData} />
 
           <div className="space-y-4">
             {loadingData ? (
@@ -142,12 +149,26 @@ export default function Dashboard() {
                 <ShieldCheck size={48} className="mb-4 opacity-20" />
                 <p>Déchiffrement des données en cours...</p>
               </div>
+            ) : loadError ? (
+              <div className="flex flex-col items-center justify-center gap-4 py-16 text-center border border-red-900/40 rounded-3xl bg-red-950/20">
+                <AlertTriangle size={32} className="text-red-400" />
+                <div>
+                  <p className="text-gray-200 font-medium">Impossible de charger vos mots de passe</p>
+                  <p className="text-gray-500 text-sm mt-1">{loadError}</p>
+                </div>
+                <button
+                  onClick={fetchData}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-xl text-white font-medium transition"
+                >
+                  Réessayer
+                </button>
+              </div>
             ) : items.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-24 text-gray-500 border border-dashed border-gray-800 rounded-3xl bg-gray-900/20 backdrop-blur-sm">
                 <div className="bg-gray-800/50 p-6 rounded-full mb-4 border border-white/5">
                   <KeyRound size={40} className="opacity-50" />
                 </div>
-                <h3 className="text-xl font-medium text-gray-300 mb-2">C'est vide ici !</h3>
+                <h3 className="text-xl font-medium text-gray-300 mb-2">C&apos;est vide ici !</h3>
                 <p className="max-w-md text-center text-sm opacity-60">
                   Votre coffre est sécurisé, mais il ne contient rien. Ajoutez votre premier mot de passe ci-dessus.
                 </p>
@@ -158,7 +179,7 @@ export default function Dashboard() {
                   <PasswordRow 
                     key={item.id} 
                     item={item} 
-                    masterKey={masterKey!} 
+                    vaultKey={vaultKey!} 
                     onDelete={(id) => setItems(prev => prev.filter(i => i.id !== id))} 
                   />
                 ))}
@@ -191,7 +212,7 @@ export default function Dashboard() {
 
         {/* FOOTER */}
         <div className="mt-10 text-center text-gray-600 text-xs py-4">
-          <p>SecureVault • Chiffrement Zero-Knowledge • Vos clés ne quittent jamais cet appareil</p>
+          <p>SecureVault • Chiffrement côté client (AES-256-GCM) • Votre clé reste sur cet appareil</p>
         </div>
 
       </div>
