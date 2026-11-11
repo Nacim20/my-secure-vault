@@ -3,13 +3,18 @@
 import { useState } from 'react';
 import { Lock, ArrowRight, Loader2, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
+import { MIN_MASTER_KEY_LENGTH } from '@/components/providers/VaultProvider';
 
 interface VaultGuardProps {
   onUnlock: (key: string) => Promise<boolean>;
+  onSetup: (key: string) => Promise<boolean>;
+  /** Vrai quand le compte n'a pas encore de clé maître : on la crée au lieu de la saisir. */
+  requiresSetup: boolean;
 }
 
-export default function VaultGuard({ onUnlock }: VaultGuardProps) {
+export default function VaultGuard({ onUnlock, onSetup, requiresSetup }: VaultGuardProps) {
   const [key, setKey] = useState('');
+  const [confirmKey, setConfirmKey] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isError, setIsError] = useState(false);
 
@@ -17,12 +22,23 @@ export default function VaultGuard({ onUnlock }: VaultGuardProps) {
     e.preventDefault();
     if (!key.trim()) return;
 
+    if (requiresSetup) {
+      if (key.length < MIN_MASTER_KEY_LENGTH) {
+        toast.error(`La clé maître doit faire au moins ${MIN_MASTER_KEY_LENGTH} caractères`);
+        return;
+      }
+      if (key !== confirmKey) {
+        toast.error('Les deux clés ne correspondent pas');
+        return;
+      }
+    }
+
     setIsLoading(true);
     setIsError(false);
 
     try {
-      // On tente de déverrouiller via la fonction du parent
-      const success = await onUnlock(key);
+      // Création de la clé maître (premier accès) ou déverrouillage
+      const success = requiresSetup ? await onSetup(key) : await onUnlock(key);
       
       if (!success) {
         setIsError(true);
@@ -34,9 +50,9 @@ export default function VaultGuard({ onUnlock }: VaultGuardProps) {
         input?.classList.add('animate-shake');
         setTimeout(() => input?.classList.remove('animate-shake'), 500);
       } else {
-        toast.success("Coffre déverrouillé");
+        toast.success(requiresSetup ? "Clé maître créée" : "Coffre déverrouillé");
       }
-    } catch (err) {
+    } catch {
       setIsError(true);
       toast.error("Erreur technique lors du déverrouillage");
     } finally {
@@ -61,10 +77,12 @@ export default function VaultGuard({ onUnlock }: VaultGuardProps) {
             )}
           </div>
           <h1 className="text-4xl font-bold mb-3 bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
-            Coffre Verrouillé
+            {requiresSetup ? 'Créez votre clé maître' : 'Coffre Verrouillé'}
           </h1>
           <p className="text-gray-400 text-lg">
-            Entrez votre Clé pour accéder à vos données sécurisées.
+            {requiresSetup
+              ? `Au moins ${MIN_MASTER_KEY_LENGTH} caractères. Elle ne peut pas être récupérée : si vous la perdez, vos données sont perdues.`
+              : 'Entrez votre Clé pour accéder à vos données sécurisées.'}
           </p>
         </div>
 
@@ -85,9 +103,20 @@ export default function VaultGuard({ onUnlock }: VaultGuardProps) {
             />
           </div>
 
+          {requiresSetup && (
+            <input
+              type="password"
+              value={confirmKey}
+              onChange={(e) => setConfirmKey(e.target.value)}
+              className="w-full bg-gray-900 border-2 border-gray-800 focus:border-blue-500/50 text-white placeholder-gray-600 rounded-xl px-6 py-4 text-xl outline-none transition-all duration-200"
+              placeholder="Confirmez la clé"
+              aria-label="Confirmez la clé maître"
+            />
+          )}
+
           <button
             type="submit"
-            disabled={isLoading || !key}
+            disabled={isLoading || !key || (requiresSetup && !confirmKey)}
             className="w-full relative group overflow-hidden bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl flex items-center justify-center gap-3 transition-all transform active:scale-[0.98] shadow-lg shadow-blue-900/20"
           >
             {isLoading ? (
@@ -97,7 +126,7 @@ export default function VaultGuard({ onUnlock }: VaultGuardProps) {
               </>
             ) : (
               <>
-                <span>Déverrouiller le coffre</span>
+                <span>{requiresSetup ? 'Créer mon coffre' : 'Déverrouiller le coffre'}</span>
                 <ArrowRight size={24} className="group-hover:translate-x-1 transition-transform" />
               </>
             )}
@@ -106,7 +135,7 @@ export default function VaultGuard({ onUnlock }: VaultGuardProps) {
 
         <div className="mt-12 flex items-center justify-center gap-2 text-sm text-gray-500">
           <ShieldCheck size={16} className="text-green-500" />
-          <p>Chiffrement Zero-Knowledge • Vos clés restent locales</p>
+          <p>Chiffrement côté client • Votre clé reste sur cet appareil</p>
         </div>
       </div>
     </div>

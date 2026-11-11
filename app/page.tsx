@@ -42,7 +42,7 @@ export default function Home() {
         SecureVault
       </h1>
       <p className="text-xl text-gray-400 max-w-lg mb-8">
-        Le gestionnaire de mots de passe Zero-Knowledge. 
+        Un gestionnaire de mots de passe à chiffrement côté client. 
         <br/>Vos données, votre clé, votre sécurité.
       </p>
       
@@ -51,7 +51,7 @@ export default function Home() {
           href="/login" 
           className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-full font-bold transition shadow-lg shadow-blue-900/20"
         >
-          Se connecter / S'inscrire
+          Se connecter / S&apos;inscrire
         </Link>
       </div>
     </div>

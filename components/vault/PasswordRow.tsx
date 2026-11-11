@@ -8,18 +8,42 @@ import { toast } from 'sonner';
 
 interface Props {
   item: VaultItem;
-  masterKey: string;
+  vaultKey: CryptoKey;
   onDelete: (id: string) => void;
 }
 
-export default function PasswordRow({ item, masterKey, onDelete }: Props) {
+export default function PasswordRow({ item, vaultKey, onDelete }: Props) {
   const [isVisible, setIsVisible] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
 
-  const decryptedPassword = decrypt(item.encrypted_password, masterKey) || '❌ Erreur clé';
+  // Le mot de passe n'est déchiffré qu'au moment où on en a besoin (affichage ou copie).
+  const [plainPassword, setPlainPassword] = useState<string | null>(null);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(decryptedPassword);
+  const getPlainPassword = async (): Promise<string | null> => {
+    if (plainPassword) return plainPassword;
+    const plain = await decrypt(item.encrypted_password, vaultKey);
+    if (plain) setPlainPassword(plain);
+    return plain;
+  };
+
+  const handleToggleVisible = async () => {
+    if (isVisible) {
+      setIsVisible(false);
+      setPlainPassword(null); // on ne garde pas le clair en mémoire une fois masqué
+      return;
+    }
+    if (await getPlainPassword()) setIsVisible(true);
+    else toast.error("Impossible de déchiffrer cet élément");
+  };
+
+  const handleCopy = async () => {
+    const plain = await getPlainPassword();
+    if (!plain) {
+      toast.error("Impossible de déchiffrer cet élément");
+      return;
+    }
+    await navigator.clipboard.writeText(plain);
+    if (!isVisible) setPlainPassword(null);
     setIsCopied(true);
     toast.success("Mot de passe copié !");
     setTimeout(() => setIsCopied(false), 2000);
@@ -67,12 +91,12 @@ export default function PasswordRow({ item, masterKey, onDelete }: Props) {
         <div className="flex items-center justify-between w-full md:w-auto gap-3 bg-black/20 p-2 rounded-xl border border-white/5 md:bg-transparent md:border-0 md:p-0">
           
           <div className="font-mono text-sm px-3 py-1.5 rounded-lg bg-black/40 text-gray-300 min-w-[120px] text-center select-all">
-            {isVisible ? decryptedPassword : '••••••••••••'}
+            {isVisible && plainPassword ? plainPassword : '••••••••••••'}
           </div>
 
           <div className="flex items-center gap-1">
             <button 
-              onClick={() => setIsVisible(!isVisible)}
+              onClick={handleToggleVisible}
               className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition"
             >
               {isVisible ? <EyeOff size={18} /> : <Eye size={18} />}

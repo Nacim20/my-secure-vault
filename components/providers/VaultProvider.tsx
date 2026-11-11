@@ -1,180 +1,200 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
-import { verifyMasterKey, generateVerifier } from '@/lib/crypto';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
+import { supabase } from '@/lib/supabase';
+import {
+  createVerifier,
+  isV2Verifier,
+  unlockWithVerifier,
+  verifyLegacyPassphrase,
+} from '@/lib/crypto';
+import { migrateLegacyItems } from '@/lib/migrateLegacy';
+
+export const MIN_MASTER_KEY_LENGTH = 12;
 
 interface VaultContextType {
-  masterKey: string | null;
+  /** Clé de chiffrement dérivée. Uniquement en mémoire : jamais écrite dans le navigateur. */
+  vaultKey: CryptoKey | null;
   isLocked: boolean;
   isLoading: boolean;
   requiresSetup: boolean;
-  unlock: (key: string) => Promise<boolean>;
-  setup: (key: string) => Promise<boolean>;
+  unlock: (passphrase: string) => Promise<boolean>;
+  setup: (passphrase: string) => Promise<boolean>;
   lock: () => void;
 }
 
 const VaultContext = createContext<VaultContextType | undefined>(undefined);
 
+// Le verifier n'est pas secret (c'est un texte chiffré) : on peut le mettre en cache
+// pour éviter une requête à chaque déverrouillage. La clé maître, elle, n'est jamais stockée.
+const VERIFIER_CACHE_KEY = 'vault_verifier';
+
 export function VaultProvider({ children }: { children: React.ReactNode }) {
-  const [masterKey, setMasterKey] = useState<string | null>(null);
+  const [vaultKey, setVaultKey] = useState<CryptoKey | null>(null);
   const [requiresSetup, setRequiresSetup] = useState(false);
   const [verifier, setVerifier] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
-  // Nettoyage complet
-  const resetState = () => {
-    setMasterKey(null);
+  const resetState = useCallback(() => {
+    setVaultKey(null);
     setVerifier(null);
     setRequiresSetup(false);
     setIsLoading(false);
-    if (typeof window !== 'undefined') {
-      sessionStorage.removeItem('vault_master_key');
-      sessionStorage.removeItem('vault_verifier'); // On nettoie aussi le cache du verifier
-    }
-  };
+    sessionStorage.removeItem(VERIFIER_CACHE_KEY);
+    // Nettoyage d'une ancienne version qui stockait la clé maître : on s'assure qu'elle n'en reste rien.
+    sessionStorage.removeItem('vault_master_key');
+  }, []);
 
-  const loadProfile = async (userId: string) => {
+  const loadProfile = useCallback(async (userId: string) => {
     try {
-      // 1. D'abord, on regarde si on a le verifier en cache (C'est ça qui répare le bug du refresh)
-      const cachedVerifier = sessionStorage.getItem('vault_verifier');
-      if (cachedVerifier) {
-        console.log("⚡ Cache: Verifier restauré instantanément");
-        setVerifier(cachedVerifier);
-      }
+      sessionStorage.removeItem('vault_master_key'); // ancienne version, voir resetState
+      const cached = sessionStorage.getItem(VERIFIER_CACHE_KEY);
+      if (cached) setVerifier(cached);
 
-      // 2. On lance quand même la requête pour être à jour, mais on n'attend pas forcément
       const { data, error } = await supabase
         .from('profiles')
         .select('key_verifier')
         .eq('id', userId)
         .single();
 
-      if (error || !data || !data.key_verifier) {
-        // Si vraiment on a rien trouvé nulle part
-        if (!cachedVerifier) {
+      if (error || !data?.key_verifier) {
+        if (!cached) {
           setRequiresSetup(true);
           setVerifier(null);
         }
       } else {
-        // Mise à jour du cache avec la version fraîche
         setVerifier(data.key_verifier);
-        sessionStorage.setItem('vault_verifier', data.key_verifier); 
+        sessionStorage.setItem(VERIFIER_CACHE_KEY, data.key_verifier);
         setRequiresSetup(false);
-
-        // Tentative de déverrouillage automatique (si la clé est aussi en cache)
-        const savedKey = sessionStorage.getItem('vault_master_key');
-        if (savedKey) {
-            if (verifyMasterKey(savedKey, data.key_verifier)) {
-                setMasterKey(savedKey);
-            } else {
-                sessionStorage.removeItem('vault_master_key');
-            }
-        }
       }
     } catch (e) {
-      console.error("Erreur chargement:", e);
+      console.error('Erreur de chargement du profil :', e);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
 
-    // Sécurité : Si dans 2s c'est pas chargé, on arrête le spinner
+    // Sécurité : si rien n'est chargé après 2 s, on arrête l'écran de chargement.
     const safetyTimer = setTimeout(() => {
-      if (mounted) setIsLoading((l) => (l ? false : l));
+      if (mounted) setIsLoading(false);
     }, 2000);
 
-    const init = async () => {
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (!mounted) return;
-        if (session?.user) {
-          await loadProfile(session.user.id);
-        } else {
-          resetState();
-        }
-      });
-      return subscription;
-    };
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mounted) return;
+      if (session?.user) await loadProfile(session.user.id);
+      else resetState();
+    });
 
-    const subPromise = init();
     return () => {
       mounted = false;
       clearTimeout(safetyTimer);
-      subPromise.then(sub => sub?.unsubscribe());
+      subscription.unsubscribe();
     };
-  }, []);
+  }, [loadProfile, resetState]);
 
-  // 👇 LA FONCTION UNLOCK CORRIGÉE
-  const unlock = async (key: string): Promise<boolean> => {
-    // On cherche le verifier partout : dans l'état, ou dans le cache
-    let currentVerifier = verifier || sessionStorage.getItem('vault_verifier');
+  /** Retrouve le verifier : en mémoire, puis en cache, puis en base. */
+  const getVerifier = async (): Promise<string | null> => {
+    const known = verifier ?? sessionStorage.getItem(VERIFIER_CACHE_KEY);
+    if (known) return known;
 
-    // Si toujours pas là, on tente un dernier appel désespéré à la DB
-    if (!currentVerifier) {
-        console.log("⚠️ Récupération d'urgence du verifier...");
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-            const { data } = await supabase
-                .from('profiles')
-                .select('key_verifier')
-                .eq('id', user.id)
-                .single();
-            if (data?.key_verifier) {
-                currentVerifier = data.key_verifier;
-                setVerifier(data.key_verifier);
-                sessionStorage.setItem('vault_verifier', data.key_verifier);
-            }
-        }
-    }
-
-    if (!currentVerifier) {
-        console.error("❌ Echec: Impossible de vérifier la clé (Verifier manquant)");
-        return false;
-    }
-
-    try {
-      if (verifyMasterKey(key, currentVerifier)) {
-        setMasterKey(key);
-        sessionStorage.setItem('vault_master_key', key);
-        return true;
-      }
-    } catch (e) { console.error(e); }
-    
-    return false;
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return null;
+    const { data } = await supabase
+      .from('profiles')
+      .select('key_verifier')
+      .eq('id', user.id)
+      .single();
+    if (!data?.key_verifier) return null;
+    setVerifier(data.key_verifier);
+    sessionStorage.setItem(VERIFIER_CACHE_KEY, data.key_verifier);
+    return data.key_verifier;
   };
 
-  const setup = async (key: string) => {
-    const { data: { user } } = await supabase.auth.getUser();
+  const saveVerifier = async (newVerifier: string, userId: string): Promise<boolean> => {
+    const { error } = await supabase.from('profiles').upsert({ id: userId, key_verifier: newVerifier });
+    if (error) return false;
+    setVerifier(newVerifier);
+    sessionStorage.setItem(VERIFIER_CACHE_KEY, newVerifier);
+    setRequiresSetup(false);
+    return true;
+  };
+
+  const unlock = async (passphrase: string): Promise<boolean> => {
+    try {
+      const currentVerifier = await getVerifier();
+      if (!currentVerifier) return false;
+
+      let key: CryptoKey | null = null;
+
+      if (isV2Verifier(currentVerifier)) {
+        key = await unlockWithVerifier(passphrase, currentVerifier);
+      } else if (await verifyLegacyPassphrase(passphrase, currentVerifier)) {
+        // Ancien compte : on passe au nouveau format. Le nouveau verifier est enregistré en premier,
+        // puis les éléments sont convertis. Si ça s'interrompt, la suite se fait au prochain déverrouillage.
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) return false;
+        const created = await createVerifier(passphrase);
+        if (!(await saveVerifier(created.verifier, user.id))) return false;
+        key = created.key;
+      }
+
+      if (!key) return false;
+
+      // Convertit les éventuels éléments encore dans l'ancien format.
+      try {
+        const { migrated, failed } = await migrateLegacyItems(passphrase, key);
+        if (migrated > 0) toast.success(`${migrated} mot(s) de passe mis à jour vers le nouveau chiffrement`);
+        if (failed > 0) toast.error(`${failed} élément(s) n'ont pas pu être convertis`);
+      } catch (e) {
+        console.error('Migration interrompue :', e);
+      }
+
+      setVaultKey(key);
+      return true;
+    } catch (e) {
+      console.error(e);
+      return false;
+    }
+  };
+
+  const setup = async (passphrase: string): Promise<boolean> => {
+    if (passphrase.length < MIN_MASTER_KEY_LENGTH) return false;
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     if (!user) return false;
     try {
-      const newVerifier = generateVerifier(key);
-      const { error } = await supabase.from('profiles').upsert({ id: user.id, key_verifier: newVerifier });
-      if (!error) {
-        setVerifier(newVerifier);
-        sessionStorage.setItem('vault_verifier', newVerifier); // On cache direct
-        setMasterKey(key);
-        sessionStorage.setItem('vault_master_key', key);
-        setRequiresSetup(false);
-        return true;
-      }
-    } catch (e) { console.error(e); }
-    return false;
+      const created = await createVerifier(passphrase);
+      if (!(await saveVerifier(created.verifier, user.id))) return false;
+      setVaultKey(created.key);
+      return true;
+    } catch (e) {
+      console.error(e);
+      return false;
+    }
   };
 
   const lock = () => {
-    setMasterKey(null);
-    sessionStorage.removeItem('vault_master_key');
-    // On garde le verifier en cache pour pouvoir déverrouiller vite !
+    setVaultKey(null);
     router.refresh();
   };
 
   return (
-    <VaultContext.Provider value={{ masterKey, isLocked: !masterKey, isLoading, requiresSetup, unlock, setup, lock }}>
+    <VaultContext.Provider
+      value={{ vaultKey, isLocked: !vaultKey, isLoading, requiresSetup, unlock, setup, lock }}
+    >
       {children}
     </VaultContext.Provider>
   );
@@ -182,6 +202,6 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
 
 export const useVault = () => {
   const context = useContext(VaultContext);
-  if (!context) throw new Error("useVault must be used within VaultProvider");
+  if (!context) throw new Error('useVault must be used within VaultProvider');
   return context;
 };
