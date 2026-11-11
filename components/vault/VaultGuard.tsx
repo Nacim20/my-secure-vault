@@ -92,6 +92,7 @@ export default function VaultGuard({ onUnlock, onSetup, requiresSetup }: VaultGu
             <input
               id="master-key-input"
               type="password"
+              autoComplete={requiresSetup ? "new-password" : "off"}
               value={key}
               onChange={(e) => {
                 setKey(e.target.value);

@@ -89,6 +89,7 @@ export default function LoginPage() {
             <label className="block text-xs font-medium text-gray-500 mb-1 ml-1">EMAIL</label>
             <input
               type="email"
+              autoComplete="email"
               required
               placeholder="votre@email.com"
               className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition placeholder:text-gray-700"
@@ -101,6 +102,7 @@ export default function LoginPage() {
             <label className="block text-xs font-medium text-gray-500 mb-1 ml-1">MOT DE PASSE</label>
             <input
               type="password"
+              autoComplete={isSignUp ? "new-password" : "current-password"}
               required
               placeholder="••••••••••••"
               className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition placeholder:text-gray-700"
